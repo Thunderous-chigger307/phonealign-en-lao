@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from phonalign.align import AlignmentResult
+from phonalign.errors import UnmappablePhoneError
 
 
 @dataclass
@@ -34,6 +35,18 @@ def evaluate(utt_id: str, result: AlignmentResult, flag_threshold: float = 0.5) 
         min_score=round(min_score, 4),
         detail="low mean confidence — check transcript/audio match" if flagged else "",
     )
+
+
+def error_row(utt_id: str, exc: Exception) -> QARow:
+    """Turn a per-utterance failure into a report row so the run can continue."""
+    if isinstance(exc, UnmappablePhoneError):
+        detail = (
+            f"unmappable phone {exc.phone!r} in word {exc.word!r} "
+            f"(language {exc.language}) — add it to FALLBACK_PHONE_MAP or LANG_TOKEN_OVERRIDES"
+        )
+    else:
+        detail = f"{type(exc).__name__}: {exc}"
+    return QARow(utt_id=utt_id, status="error", detail=detail)
 
 
 def write_report(rows: list[QARow], out_dir: str | Path) -> Path:

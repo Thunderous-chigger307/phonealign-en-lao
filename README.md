@@ -111,8 +111,9 @@ and use a pass-through text cleaner (the text is already IPA), e.g.
 2. **Vocab mapping**: each phone is mapped onto one or more of the acoustic
    model's 392 espeak phone tokens (per-language `LANG_TOKEN_OVERRIDES` →
    exact match → stress/length-stripped → greedy longest-match segmentation →
-   `FALLBACK_PHONE_MAP`). Unmappable phones fail loudly with the offending
-   phone and word. The overrides exist because the model concentrates its
+   `FALLBACK_PHONE_MAP`). Unmappable phones raise `UnmappablePhoneError`
+   naming the offending phone and word; the CLI catches it, skips that one
+   utterance into `report.csv`, and continues the batch. The overrides exist because the model concentrates its
    probability mass on the token spellings its training transcripts used —
    e.g. for Lao it emits espeak's `ph`/`th`/`x` and tone-marked vowels
    (`i5`, `ɑ5`), so aligning against those instead of the exact-IPA tokens
@@ -130,7 +131,11 @@ and use a pass-through text cleaner (the text is already IPA), e.g.
   cache, audio I/O).
 - Console shows `?` instead of IPA: the terminal font lacks IPA glyphs —
   files on disk are unaffected (always UTF-8).
-- An utterance errors with `UnmappablePhoneError`: add a mapping to
+- An utterance fails (bad audio, `UnmappablePhoneError`, ...): the CLI skips
+  it, records an `error` row in `report.csv` with the reason, and keeps
+  going — one weird transcript never kills a large batch run. Filter
+  `report.csv` by status to find and fix the skipped utterances. For
+  unmappable phones specifically, add a mapping to
   `phonalign.align.FALLBACK_PHONE_MAP` (map the phone to the closest tokens
   in the model vocab) — and please report it.
 - A specific phone consistently scores ~0 in the JSON output even though the

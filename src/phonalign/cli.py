@@ -95,10 +95,10 @@ def align(
                         sample_rate=sample_rate, hop_length=hop_length,
                     )
                 qa_rows.append(qa.evaluate(utt.id, result, flag_threshold))
-            except Exception as exc:  # isolate per-utterance failures
+            except Exception as exc:  # skip the utterance, log it, keep going
                 n_err += 1
-                qa_rows.append(qa.QARow(utt_id=utt.id, status="error", detail=str(exc)))
-                progress.console.print(f"[red]error[/red] {utt.id}: {exc}")
+                qa_rows.append(qa.error_row(utt.id, exc))
+                progress.console.print(f"[red]skip[/red] {utt.id}: {exc}")
             progress.advance(task)
 
     if manifest is not None:
@@ -110,10 +110,16 @@ def align(
     n_flag = sum(1 for r in qa_rows if r.status == "flagged")
     n_ok = sum(1 for r in qa_rows if r.status == "ok")
     console.print(
-        f"\n[bold]Done:[/bold] {n_ok} ok, {n_flag} flagged, {n_err} errors. "
+        f"\n[bold]Done:[/bold] {n_ok} ok, {n_flag} flagged, {n_err} skipped. "
         f"Report: {report}"
     )
     if n_err:
+        console.print(
+            f"[yellow]{n_err} utterance(s) skipped — see the 'error' rows in {report}[/yellow]"
+        )
+    if utts and n_err == len(utts):
+        # every utterance failed: that's a setup problem, not bad data
+        err_console.print("all utterances failed — check language code, audio format, and transcripts")
         raise typer.Exit(1)
 
 
