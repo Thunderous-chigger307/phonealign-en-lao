@@ -11,6 +11,7 @@ from phonalign.align import (
     PhoneVocabMapper,
     Word,
     ctc_forced_align,
+    load_phone_map,
 )
 from phonalign.errors import AlignmentError, G2PError, UnmappablePhoneError
 from phonalign.g2p import WordG2P
@@ -184,6 +185,59 @@ class TestAlignBatch:
     def test_bad_batch_size_rejected(self, aligner, wav):
         with pytest.raises(ValueError):
             aligner.align_batch([(wav, "one")], batch_size=0)
+
+
+class WeirdG2P:
+    """Emits a phone ('ʙ') that FakeAcoustic's vocab can't map."""
+
+    def word_phones(self, text):
+        return [WordG2P(word=text, phones=["ʙ", "a"])]
+
+
+class TestPhoneMap:
+    @pytest.fixture
+    def wav(self, tmp_path):
+        import soundfile as sf
+
+        path = tmp_path / "utt.wav"
+        rng = np.random.default_rng(0)
+        sf.write(path, rng.standard_normal(1600).astype(np.float32) * 0.1, 16000)
+        return str(path)
+
+    def make_aligner(self, **kwargs):
+        a = Aligner(lang="xx", g2p=WeirdG2P(), **kwargs)
+        a.acoustic = FakeAcoustic()
+        return a
+
+    def test_unmappable_without_phone_map(self, wav):
+        with pytest.raises(UnmappablePhoneError):
+            self.make_aligner().align(wav, "word")
+
+    def test_phone_map_rescues_unmappable(self, wav):
+        result = self.make_aligner(phone_map={"ʙ": "b"}).align(wav, "word")
+        assert [p.label for p in result.phones] == ["ʙ", "a"]
+
+    def test_phone_map_accepts_token_lists(self, wav):
+        result = self.make_aligner(phone_map={"ʙ": ["a", "b"]}).align(wav, "word")
+        assert [p.label for p in result.phones] == ["ʙ", "a"]
+
+    def test_load_phone_map(self, tmp_path):
+        path = tmp_path / "map.json"
+        path.write_text('{"\\u1e5f": "b", "x": ["a", "b"]}', encoding="utf-8")
+        assert load_phone_map(path) == {"ṟ": ["b"], "x": ["a", "b"]}
+
+    def test_load_phone_map_accepts_utf8_bom(self, tmp_path):
+        # Windows editors (Notepad, PowerShell 5.1) write UTF-8 with a BOM
+        path = tmp_path / "map.json"
+        path.write_bytes(b'\xef\xbb\xbf{"x": "b"}')
+        assert load_phone_map(path) == {"x": ["b"]}
+
+    def test_load_phone_map_rejects_bad_shapes(self, tmp_path):
+        for bad in ('["not", "a", "dict"]', '{"p": []}', '{"p": 3}'):
+            path = tmp_path / "map.json"
+            path.write_text(bad, encoding="utf-8")
+            with pytest.raises(ValueError):
+                load_phone_map(path)
 
 
 class TestFullTimeline:

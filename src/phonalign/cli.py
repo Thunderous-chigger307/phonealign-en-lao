@@ -52,6 +52,12 @@ def align(
     ),
     val_count: int = typer.Option(0, help="Held-out utterances for the VITS val filelist"),
     preserve_stress: bool = typer.Option(False, help="Keep espeak stress marks in phone labels"),
+    phone_map: Path = typer.Option(
+        None, "--phone-map",
+        help='JSON file of extra phone -> model-token mappings, e.g. {"ẽ": "e", "ʙ": ["b"]}. '
+        "Wins over built-in mappings; use it to rescue phones that would otherwise be "
+        "unmappable, without editing library source.",
+    ),
     flag_threshold: float = typer.Option(
         0.5, help="Flag utterances whose mean phone confidence is below this"
     ),
@@ -59,8 +65,16 @@ def align(
     """Align a corpus and write TTS-ready artifacts."""
     from phonalign import corpus as corpus_mod
     from phonalign import qa
-    from phonalign.align import Aligner
+    from phonalign.align import Aligner, load_phone_map
     from phonalign.writers import ManifestWriter, VitsFilelistWriter, write_durations, write_textgrid
+
+    custom_map: dict[str, list[str]] = {}
+    if phone_map is not None:
+        try:
+            custom_map = load_phone_map(phone_map)
+        except Exception as exc:
+            err_console.print(f"could not read --phone-map {phone_map}: {exc}")
+            raise typer.Exit(2)
 
     fmts = [f.strip() for f in formats.split(",") if f.strip()]
     unknown = set(fmts) - set(FORMATS)
@@ -76,7 +90,16 @@ def align(
     console.print(f"[green]Found {len(utts)} utterances[/green] in {input}")
 
     console.print(f"Loading G2P + acoustic model (lang={lang}, device={device}) ...")
-    aligner = Aligner(lang=lang, device=device, preserve_stress=preserve_stress)
+    aligner = Aligner(
+        lang=lang, device=device, preserve_stress=preserve_stress, phone_map=custom_map
+    )
+    for p, toks in custom_map.items():
+        bad = [t for t in toks if t not in aligner.acoustic.vocab]
+        if bad:
+            console.print(
+                f"[yellow]warning:[/yellow] --phone-map entry {p!r} uses token(s) "
+                f"{bad} not in the model vocab — the mapping will be ignored"
+            )
 
     if batch_size == 0:
         batch_size = 8 if aligner.acoustic.device.type == "cuda" else 1

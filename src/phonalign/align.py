@@ -113,6 +113,30 @@ class AlignmentResult:
         return out
 
 
+def load_phone_map(path) -> dict[str, list[str]]:
+    """Read a user phone -> vocab-token mapping from a JSON file.
+
+    Format: {"phone": "token"} or {"phone": ["token", ...]}. Used to rescue
+    phones the built-in mapping can't place (or to override it) without
+    editing library source.
+    """
+    import json
+    from pathlib import Path
+
+    # utf-8-sig: Windows editors (Notepad, PowerShell 5.1) write a UTF-8 BOM
+    raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(raw, dict):
+        raise ValueError("phone map must be a JSON object: {\"phone\": \"token\" or [\"tokens\"]}")
+    out: dict[str, list[str]] = {}
+    for phone, toks in raw.items():
+        if isinstance(toks, str):
+            toks = [toks]
+        if not isinstance(toks, list) or not toks or not all(isinstance(t, str) for t in toks):
+            raise ValueError(f"phone {phone!r}: expected a token string or non-empty token list")
+        out[phone] = toks
+    return out
+
+
 def ctc_forced_align(
     log_probs: torch.Tensor, targets: torch.Tensor, blank: int
 ) -> list[tuple[int, int, int, float]]:
@@ -281,9 +305,16 @@ class Aligner:
         model_id: str | None = None,
         preserve_stress: bool = False,
         g2p: G2PBackend | None = None,
+        phone_map: dict[str, list[str] | str] | None = None,
     ):
         self.lang = lang
         self.g2p = g2p or get_g2p(lang, preserve_stress=preserve_stress)
+        # User phone -> token mappings; win over every built-in mapping route.
+        # Values may be a single token or a token list (see load_phone_map).
+        self.phone_map: dict[str, list[str]] = {
+            p: [toks] if isinstance(toks, str) else list(toks)
+            for p, toks in (phone_map or {}).items()
+        }
         kwargs = {"device": device}
         if model_id:
             kwargs["model_id"] = model_id
@@ -293,9 +324,9 @@ class Aligner:
     @property
     def mapper(self) -> PhoneVocabMapper:
         if self._mapper is None:
-            self._mapper = PhoneVocabMapper(
-                self.acoustic.vocab, overrides=LANG_TOKEN_OVERRIDES.get(self.lang)
-            )
+            overrides = dict(LANG_TOKEN_OVERRIDES.get(self.lang) or {})
+            overrides.update(self.phone_map)
+            self._mapper = PhoneVocabMapper(self.acoustic.vocab, overrides=overrides or None)
         return self._mapper
 
     def align(self, wav_path: str, text: str) -> AlignmentResult:

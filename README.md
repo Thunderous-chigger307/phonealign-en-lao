@@ -168,9 +168,19 @@ appendable manifests, so shards merge trivially.
   it, records an `error` row in `report.csv` with the reason, and keeps
   going — one weird transcript never kills a large batch run. Filter
   `report.csv` by status to find and fix the skipped utterances. For
-  unmappable phones specifically, add a mapping to
-  `phonalign.align.FALLBACK_PHONE_MAP` (map the phone to the closest tokens
-  in the model vocab) — and please report it.
+  unmappable phones specifically, rescue them with `--phone-map map.json`
+  (see below) — and please report them so they can become built-in defaults.
+- Rescuing unmappable phones: write a JSON file mapping each phone to the
+  closest model vocab token(s) and pass it with `--phone-map`:
+
+  ```json
+  {"ẽ": "e", "ʙ": ["b"], "ɧ": ["ʃ"]}
+  ```
+
+  User mappings win over every built-in route (including
+  `LANG_TOKEN_OVERRIDES`), so the same file also lets you correct a built-in
+  mapping you disagree with. The Python API takes the same thing directly:
+  `Aligner(lang="...", phone_map={"ẽ": "e"})`.
 - A specific phone consistently scores ~0 in the JSON output even though the
   audio is clean: the model probably prefers a different vocab token for that
   sound. Greedy-decode the emissions to see what the model hears, then add a
