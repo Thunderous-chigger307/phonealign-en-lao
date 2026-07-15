@@ -82,6 +82,22 @@ class TestVits:
         assert first.split("|")[1] == "spk0"
 
 
+    def test_order_key_makes_output_processing_order_invariant(self, tmp_path):
+        # same 10 utterances added in two different processing orders
+        # -> identical filelists, including the seeded train/val split
+        perm = [3, 7, 0, 9, 1, 5, 8, 2, 6, 4]
+        outs = []
+        for name, order in (("a", range(10)), ("b", perm)):
+            w = VitsFilelistWriter(tmp_path / name, val_count=2)
+            for i in order:
+                w.add(f"wavs/u{i}.wav", make_result(seed=i), order=i)
+            files = {p.name: p.read_text(encoding="utf-8") for p in w.close()}
+            outs.append(files)
+        assert outs[0] == outs[1]
+        first = outs[0]["filelist_all.txt"].splitlines()[0]
+        assert first.startswith("wavs/u0.wav")
+
+
 class TestManifest:
     def test_jsonl_and_per_utt(self, tmp_path):
         m = ManifestWriter(tmp_path)
@@ -97,3 +113,11 @@ class TestManifest:
         assert {"phone", "start", "end", "score"} <= set(rec["phones"][0])
         per_utt = json.loads((tmp_path / "json" / "utt1.json").read_text(encoding="utf-8"))
         assert per_utt == rec
+
+    def test_out_of_order_adds_restore_corpus_order(self, tmp_path):
+        m = ManifestWriter(tmp_path)
+        for i in (2, 0, 1):
+            m.add(f"utt{i}", f"wavs/utt{i}.wav", make_result(seed=i), order=i)
+        m.close()
+        lines = (tmp_path / "manifest.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        assert [json.loads(ln)["id"] for ln in lines] == ["utt0", "utt1", "utt2"]

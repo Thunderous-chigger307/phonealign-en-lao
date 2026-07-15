@@ -25,22 +25,32 @@ class VitsFilelistWriter:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.val_count = val_count
         self.seed = seed
-        self._rows: list[str] = []
+        self._rows: list[tuple[int, str]] = []
 
-    def add(self, wav_path: str, result: AlignmentResult, speaker: str | None = None) -> None:
+    def add(
+        self,
+        wav_path: str,
+        result: AlignmentResult,
+        speaker: str | None = None,
+        order: int | None = None,
+    ) -> None:
+        """`order` fixes the row's position in the filelists; batched pipelines
+        pass the corpus index so files (and the seeded val split) come out
+        identical no matter what order utterances were processed in."""
         fields = [str(wav_path)]
         if speaker is not None:
             fields.append(speaker)
         fields.append(phoneme_text(result))
-        self._rows.append("|".join(fields))
+        key = order if order is not None else len(self._rows)
+        self._rows.append((key, "|".join(fields)))
 
     def close(self) -> list[Path]:
+        rows = [line for _, line in sorted(self._rows, key=lambda t: t[0])]
         written = []
         all_path = self.out_dir / "filelist_all.txt"
-        all_path.write_text("\n".join(self._rows) + "\n", encoding="utf-8")
+        all_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
         written.append(all_path)
-        if self.val_count > 0 and len(self._rows) > self.val_count:
-            rows = list(self._rows)
+        if self.val_count > 0 and len(rows) > self.val_count:
             random.Random(self.seed).shuffle(rows)
             val, train = rows[: self.val_count], rows[self.val_count :]
             for name, subset in (("train", train), ("val", val)):

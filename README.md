@@ -60,6 +60,9 @@ phonalign align -i corpus/ -o out/ --sample-rate 24000 --hop-length 300 -f durat
 
 # Multi-speaker metadata.csv (id|speaker|text)
 phonalign align -i corpus/ -o out/ --speaker-column
+
+# GPU with batched inference (16 utterances per forward pass)
+phonalign align -i corpus/ -o out/ --device cuda --batch-size 16
 ```
 
 Output tree:
@@ -87,6 +90,13 @@ for p in result.phones:
 for w in result.words:
     print(w.label, w.start, w.end)
 timeline = result.full_timeline()          # gap-free, with "sil" phones
+
+# Batched: one model forward pass per `batch_size` utterances. Per-item
+# failures come back as exceptions in the result list, never raised.
+outcomes = aligner.align_batch([("utt1.wav", "text one"), ("utt2.wav", "text two")], batch_size=8)
+for out in outcomes:
+    if isinstance(out, Exception):
+        print("skipped:", out)
 ```
 
 Writers are importable too: `phonalign.writers.write_textgrid`,
@@ -124,6 +134,29 @@ and use a pass-through text cleaner (the text is already IPA), e.g.
    back into phone and word intervals with per-phone confidence.
 4. **Outputs**: timestamps are converted to your TTS sample rate; duration
    rounding is cumulative so frame counts always sum to the utterance total.
+
+## Performance
+
+`--batch-size` controls how many utterances go through the acoustic model per
+forward pass. The default (`0` = auto) picks **1 on CPU and 8 on CUDA**, and
+that asymmetry is deliberate, measured on real corpora:
+
+- **CPU**: torch already parallelizes a single utterance across all cores, so
+  batching adds nothing — and because batches are padded to their longest
+  member, mixed-length batches actively *waste* compute (we measured 0.5–0.75x
+  vs. sequential). Leave it at auto.
+- **GPU**: a single utterance nowhere near fills the device, so batching is a
+  large win. Start with 8–16 and raise it until you approach VRAM limits.
+
+Batched runs process utterances in length-sorted order to keep padding waste
+near zero. Outputs are unaffected: emissions are masked and sliced back to each
+utterance's true frame count (identical scores to sequential runs), and
+manifests, filelists, the train/val split, and `report.csv` are all written in
+corpus order regardless of processing order.
+
+For multi-GPU or multi-machine scaling, split the corpus and run one
+`phonalign align` process per shard — outputs are per-utterance files plus
+appendable manifests, so shards merge trivially.
 
 ## Troubleshooting
 

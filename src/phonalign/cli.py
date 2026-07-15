@@ -41,6 +41,12 @@ def align(
     sample_rate: int = typer.Option(22050, help="Target TTS sample rate for duration frames"),
     hop_length: int = typer.Option(256, help="Mel hop length for duration frames"),
     device: str = typer.Option("cpu", help="cpu or cuda"),
+    batch_size: int = typer.Option(
+        0, "--batch-size", "-b", min=0,
+        help="Utterances per model forward pass. 0 = auto: 1 on cpu (torch already "
+        "uses all cores per utterance), 8 on cuda. Batched runs process in "
+        "length-sorted order to minimize padding.",
+    ),
     speaker_column: bool = typer.Option(
         False, "--speaker-column", help="metadata.csv rows are id|speaker|text"
     ),
@@ -72,34 +78,60 @@ def align(
     console.print(f"Loading G2P + acoustic model (lang={lang}, device={device}) ...")
     aligner = Aligner(lang=lang, device=device, preserve_stress=preserve_stress)
 
+    if batch_size == 0:
+        batch_size = 8 if aligner.acoustic.device.type == "cuda" else 1
+    indexed = list(enumerate(utts))
+    if batch_size > 1:
+        # Batches are padded to their longest utterance; grouping similar
+        # lengths keeps that padding (wasted compute) near zero.
+        import soundfile as sf
+
+        def _duration(u) -> float:
+            try:
+                return sf.info(str(u.wav_path)).duration
+            except Exception:
+                return 0.0
+
+        indexed.sort(key=lambda iu: _duration(iu[1]))
+        console.print(f"Batching {batch_size} utterances per forward pass (length-sorted)")
+
     out.mkdir(parents=True, exist_ok=True)
     manifest = ManifestWriter(out) if "json" in fmts else None
     vits = VitsFilelistWriter(out / "vits", val_count=val_count) if "vits" in fmts else None
-    qa_rows: list[qa.QARow] = []
+    rows_by_idx: dict[int, qa.QARow] = {}
     n_err = 0
 
     with Progress(console=console) as progress:
         task = progress.add_task("Aligning", total=len(utts))
-        for utt in utts:
-            try:
-                result = aligner.align(str(utt.wav_path), utt.text)
-                if "textgrid" in fmts:
-                    write_textgrid(result, out / "textgrid" / f"{utt.id}.TextGrid")
-                if manifest is not None:
-                    manifest.add(utt.id, str(utt.wav_path), result)
-                if vits is not None:
-                    vits.add(str(utt.wav_path), result, speaker=utt.speaker)
-                if "durations" in fmts:
-                    write_durations(
-                        result, utt.id, out / "durations",
-                        sample_rate=sample_rate, hop_length=hop_length,
-                    )
-                qa_rows.append(qa.evaluate(utt.id, result, flag_threshold))
-            except Exception as exc:  # skip the utterance, log it, keep going
-                n_err += 1
-                qa_rows.append(qa.error_row(utt.id, exc))
-                progress.console.print(f"[red]skip[/red] {utt.id}: {exc}")
-            progress.advance(task)
+        for start in range(0, len(indexed), batch_size):
+            chunk = indexed[start : start + batch_size]
+            outcomes = aligner.align_batch(
+                [(str(u.wav_path), u.text) for _, u in chunk], batch_size=batch_size
+            )
+            for (idx, utt), outcome in zip(chunk, outcomes):
+                try:
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    result = outcome
+                    if "textgrid" in fmts:
+                        write_textgrid(result, out / "textgrid" / f"{utt.id}.TextGrid")
+                    if manifest is not None:
+                        manifest.add(utt.id, str(utt.wav_path), result, order=idx)
+                    if vits is not None:
+                        vits.add(str(utt.wav_path), result, speaker=utt.speaker, order=idx)
+                    if "durations" in fmts:
+                        write_durations(
+                            result, utt.id, out / "durations",
+                            sample_rate=sample_rate, hop_length=hop_length,
+                        )
+                    rows_by_idx[idx] = qa.evaluate(utt.id, result, flag_threshold)
+                except Exception as exc:  # skip the utterance, log it, keep going
+                    n_err += 1
+                    rows_by_idx[idx] = qa.error_row(utt.id, exc)
+                    progress.console.print(f"[red]skip[/red] {utt.id}: {exc}")
+                progress.advance(task)
+    # report.csv keeps corpus order even when batching processed length-sorted
+    qa_rows = [rows_by_idx[i] for i in sorted(rows_by_idx)]
 
     if manifest is not None:
         manifest.close()

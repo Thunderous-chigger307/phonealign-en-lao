@@ -47,15 +47,39 @@ class AcousticModel:
         self._load()
         return self._blank_id
 
-    @torch.inference_mode()
     def emissions(self, waveform: np.ndarray) -> torch.Tensor:
         """Log-prob emissions [num_frames, vocab_size] for 16 kHz mono float audio."""
+        return self.batch_emissions([waveform])[0]
+
+    @torch.inference_mode()
+    def batch_emissions(self, waveforms: list[np.ndarray]) -> list[torch.Tensor]:
+        """Emissions for several utterances in one padded forward pass.
+
+        Waveforms are normalized individually, zero-padded to the longest item,
+        and masked so padding never influences attention; each returned emission
+        matrix is sliced back to that utterance's true frame count.
+        """
+        if not waveforms:
+            return []
         self._load()
-        x = torch.from_numpy(np.ascontiguousarray(waveform, dtype=np.float32))
-        # wav2vec2-lv-60 was trained on zero-mean/unit-var normalized audio
-        x = (x - x.mean()) / (x.std() + 1e-7)
-        logits = self._model(x.unsqueeze(0).to(self.device)).logits[0]
-        return torch.log_softmax(logits.float(), dim=-1).cpu()
+        xs = []
+        for w in waveforms:
+            x = torch.from_numpy(np.ascontiguousarray(w, dtype=np.float32))
+            # wav2vec2-lv-60 was trained on zero-mean/unit-var normalized audio
+            xs.append((x - x.mean()) / (x.std() + 1e-7))
+        lengths = torch.tensor([len(x) for x in xs], dtype=torch.long)
+        max_len = int(lengths.max())
+        batch = torch.zeros(len(xs), max_len)
+        mask = torch.zeros(len(xs), max_len, dtype=torch.long)
+        for i, x in enumerate(xs):
+            batch[i, : len(x)] = x
+            mask[i, : len(x)] = 1
+        logits = self._model(batch.to(self.device), attention_mask=mask.to(self.device)).logits
+        n_frames = self._model._get_feat_extract_output_lengths(lengths)
+        return [
+            torch.log_softmax(logits[i, : int(n_frames[i])].float(), dim=-1).cpu()
+            for i in range(len(xs))
+        ]
 
 
 def load_audio(path: str, target_sr: int = SAMPLE_RATE) -> tuple[np.ndarray, int, float]:

@@ -1,10 +1,19 @@
 import math
 
+import numpy as np
 import pytest
 import torch
 
-from phonalign.align import AlignmentResult, Phone, PhoneVocabMapper, Word, ctc_forced_align
-from phonalign.errors import AlignmentError, UnmappablePhoneError
+from phonalign.align import (
+    Aligner,
+    AlignmentResult,
+    Phone,
+    PhoneVocabMapper,
+    Word,
+    ctc_forced_align,
+)
+from phonalign.errors import AlignmentError, G2PError, UnmappablePhoneError
+from phonalign.g2p import WordG2P
 
 BLANK = 0
 
@@ -101,6 +110,80 @@ class TestPhoneVocabMapper:
         assert mapper.map_phone("ɤ") == [8]
         assert mapper.map_phone("ɤː") == [9]
         assert mapper.map_phone("g") == [10]
+
+
+class FakeAcoustic:
+    """Stands in for AcousticModel: fixed vocab, synthetic emissions."""
+
+    vocab = {"<pad>": 0, "a": 1, "b": 2}
+    blank_id = 0
+
+    def batch_emissions(self, waveforms):
+        return [make_emissions([1, 1, 1, 0, 2, 2], vocab_size=3) for _ in waveforms]
+
+    def emissions(self, waveform):
+        return self.batch_emissions([waveform])[0]
+
+
+class FakeG2P:
+    def word_phones(self, text):
+        if text == "boom":
+            raise G2PError("bad text")
+        return [WordG2P(word=text, phones=["a", "b"])]
+
+
+class TestAlignBatch:
+    @pytest.fixture
+    def wav(self, tmp_path):
+        import soundfile as sf
+
+        path = tmp_path / "utt.wav"
+        rng = np.random.default_rng(0)
+        sf.write(path, rng.standard_normal(1600).astype(np.float32) * 0.1, 16000)
+        return str(path)
+
+    @pytest.fixture
+    def aligner(self):
+        a = Aligner(lang="xx", g2p=FakeG2P())
+        a.acoustic = FakeAcoustic()
+        return a
+
+    def test_batch_matches_single(self, aligner, wav):
+        single = aligner.align(wav, "hello")
+        (batched,) = aligner.align_batch([(wav, "hello")])
+        assert isinstance(batched, AlignmentResult)
+        assert [(p.label, p.start, p.end, p.score) for p in batched.phones] == [
+            (p.label, p.start, p.end, p.score) for p in single.phones
+        ]
+
+    def test_results_positional_and_errors_isolated(self, aligner, wav):
+        outcomes = aligner.align_batch(
+            [(wav, "one"), (wav, "boom"), (wav, "two")], batch_size=3
+        )
+        assert isinstance(outcomes[0], AlignmentResult)
+        assert isinstance(outcomes[1], G2PError)
+        assert isinstance(outcomes[2], AlignmentResult)
+        assert outcomes[0].text == "one" and outcomes[2].text == "two"
+
+    def test_missing_wav_isolated(self, aligner, wav):
+        outcomes = aligner.align_batch([(wav, "one"), ("no_such.wav", "two")])
+        assert isinstance(outcomes[0], AlignmentResult)
+        assert isinstance(outcomes[1], Exception)
+        assert not isinstance(outcomes[1], AlignmentResult)
+
+    def test_all_items_fail(self, aligner):
+        outcomes = aligner.align_batch([("no_such.wav", "boom"), ("gone.wav", "x")])
+        assert all(isinstance(o, Exception) for o in outcomes)
+
+    def test_chunking_covers_all_items(self, aligner, wav):
+        outcomes = aligner.align_batch([(wav, f"w{i}") for i in range(5)], batch_size=2)
+        assert len(outcomes) == 5
+        assert all(isinstance(o, AlignmentResult) for o in outcomes)
+        assert [o.text for o in outcomes] == [f"w{i}" for i in range(5)]
+
+    def test_bad_batch_size_rejected(self, aligner, wav):
+        with pytest.raises(ValueError):
+            aligner.align_batch([(wav, "one")], batch_size=0)
 
 
 class TestFullTimeline:

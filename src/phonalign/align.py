@@ -259,6 +259,18 @@ class PhoneVocabMapper:
         return ids or None
 
 
+@dataclass
+class _PreparedText:
+    """G2P output flattened into vocab token ids, with the bookkeeping needed
+    to merge aligned token spans back into phone and word intervals."""
+
+    words_g2p: list
+    token_ids: list[int] = field(default_factory=list)
+    tokens_per_phone: list[int] = field(default_factory=list)
+    flat_phone_labels: list[str] = field(default_factory=list)
+    phones_per_word: list[int] = field(default_factory=list)
+
+
 class Aligner:
     """End-to-end aligner: text + audio file -> phone/word timestamps."""
 
@@ -287,40 +299,81 @@ class Aligner:
         return self._mapper
 
     def align(self, wav_path: str, text: str) -> AlignmentResult:
+        prep = self._prepare(text)
+        waveform, _, duration = load_audio(wav_path)
+        emissions = self.acoustic.emissions(waveform)
+        return self._merge(emissions, duration, prep, text)
+
+    def align_batch(
+        self, items: list[tuple[str, str]], batch_size: int = 8
+    ) -> list[AlignmentResult | Exception]:
+        """Align (wav_path, text) pairs, batching model forward passes.
+
+        Runs `batch_size` utterances per forward pass (padded to the longest
+        in the batch). Per-utterance failures never poison the batch: the
+        returned list matches `items` positionally, holding an
+        AlignmentResult on success or the raised exception on failure.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        results: list[AlignmentResult | Exception] = [None] * len(items)  # type: ignore[list-item]
+        for chunk_start in range(0, len(items), batch_size):
+            chunk = items[chunk_start : chunk_start + batch_size]
+            prepared: dict[int, _PreparedText] = {}
+            audio: dict[int, tuple] = {}
+            for j, (wav_path, text) in enumerate(chunk):
+                i = chunk_start + j
+                try:
+                    prepared[i] = self._prepare(text)
+                    waveform, _, duration = load_audio(wav_path)
+                    audio[i] = (waveform, duration)
+                except Exception as exc:
+                    results[i] = exc
+            ready = sorted(prepared.keys() & audio.keys())
+            if not ready:
+                continue
+            emissions = self.acoustic.batch_emissions([audio[i][0] for i in ready])
+            for i, em in zip(ready, emissions):
+                try:
+                    results[i] = self._merge(em, audio[i][1], prepared[i], items[i][1])
+                except Exception as exc:
+                    results[i] = exc
+        return results
+
+    def _prepare(self, text: str) -> _PreparedText:
+        """G2P + vocab mapping; everything that can fail before touching audio."""
         words_g2p = self.g2p.word_phones(text)
         if not words_g2p:
             raise AlignmentError(f"G2P produced no phones for text: {text!r}")
 
-        waveform, _, duration = load_audio(wav_path)
-        emissions = self.acoustic.emissions(waveform)
-        frame_dur = duration / emissions.shape[0]
-
         # Flatten phones; remember how many vocab tokens each phone expands to
         # and how many phones each word has, so spans can be merged back.
-        token_ids: list[int] = []
-        tokens_per_phone: list[int] = []
-        flat_phone_labels: list[str] = []
-        phones_per_word: list[int] = []
+        prep = _PreparedText(words_g2p=words_g2p)
         for wg in words_g2p:
-            phones_per_word.append(len(wg.phones))
+            prep.phones_per_word.append(len(wg.phones))
             for ph in wg.phones:
                 ids = self.mapper.map_phone(ph, word=wg.word, language=self.lang)
-                token_ids.extend(ids)
-                tokens_per_phone.append(len(ids))
-                flat_phone_labels.append(ph)
+                prep.token_ids.extend(ids)
+                prep.tokens_per_phone.append(len(ids))
+                prep.flat_phone_labels.append(ph)
+        return prep
 
+    def _merge(
+        self, emissions: torch.Tensor, duration: float, prep: _PreparedText, text: str
+    ) -> AlignmentResult:
+        """Viterbi over the emissions, then token spans -> phone/word intervals."""
+        frame_dur = duration / emissions.shape[0]
         spans = ctc_forced_align(
-            emissions, torch.tensor(token_ids, dtype=torch.long), self.acoustic.blank_id
+            emissions, torch.tensor(prep.token_ids, dtype=torch.long), self.acoustic.blank_id
         )
-        if len(spans) != len(token_ids):
+        if len(spans) != len(prep.token_ids):
             raise AlignmentError(
-                f"alignment returned {len(spans)} spans for {len(token_ids)} tokens"
+                f"alignment returned {len(spans)} spans for {len(prep.token_ids)} tokens"
             )
 
-        # Merge token spans -> phone intervals.
         phones: list[Phone] = []
         idx = 0
-        for label, n_tok in zip(flat_phone_labels, tokens_per_phone):
+        for label, n_tok in zip(prep.flat_phone_labels, prep.tokens_per_phone):
             group = spans[idx : idx + n_tok]
             idx += n_tok
             start = group[0][1] * frame_dur
@@ -328,10 +381,9 @@ class Aligner:
             score = sum(g[3] for g in group) / len(group)
             phones.append(Phone(label, round(start, 4), round(end, 4), round(score, 4)))
 
-        # Merge phone intervals -> word intervals.
         words: list[Word] = []
         idx = 0
-        for wg, n_ph in zip(words_g2p, phones_per_word):
+        for wg, n_ph in zip(prep.words_g2p, prep.phones_per_word):
             group = phones[idx : idx + n_ph]
             idx += n_ph
             words.append(Word(wg.word, group[0].start, group[-1].end, group))
